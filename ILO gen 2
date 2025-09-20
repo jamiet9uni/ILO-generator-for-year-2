@@ -1,0 +1,402 @@
+import React, { useEffect, useMemo, useState, useRef } from "react";
+
+/**
+ * ILO Randomiser
+ * Single-file React component (usable in a GitHub Pages site / create-react-app / Vite)
+ * - Data format (single string):
+ *   Each ILO entry:
+ *     ILO_TEXT;TITLE;TYPE;WEEK;LINK
+ *   Entries separated by a colon ':' with no extra spaces.
+ *   Example entry:
+ *     Describe how to perform a pre-anaesthetic assessment;How do you prepare animals for anaesthesia?;Lecture;Week 1;https://example.com
+ *   Multiple entries:
+ *     entry1:entry2:entry3
+ *
+ * - Easy ways to add entries:
+ *   1) Edit the DATA_STRING constant below and add new entries following the format (fastest for developers).
+ *   2) Use the "Paste / Edit ILO list" textarea in the UI to paste a bulk list in the same format, then click "Load list".
+ *
+ * Features:
+ * - Multi-select filtering by Type and Week
+ * - Deck / discard pile simulation with counts
+ * - Animated shuffle / roll effect when generating an ILO
+ * - Return ILO to deck or discard chosen ILO
+ * - Persist ILO list, deck & discard state in localStorage so it "just works" across reloads
+ *
+ * To deploy to GitHub Pages:
+ * - Put this component into a small React app (App.jsx) or convert to plain HTML/JS if you prefer.
+ * - Or copy the logic into a single HTML file with a small React bundle.
+ */
+
+// --------------------------
+// Initial data (editable)
+// --------------------------
+// Keep the exact format: ILO;TITLE;TYPE;WEEK;LINK  --- entries separated by ':'
+const DATA_STRING = `Describe how to perform a pre-anaesthetic assessment;How do you prepare animals for anaesthesia?;Lecture;Week 1;https://www.ole.bris.ac.uk/ultra/courses/_266749_1/outline/edit/document/_9707637_1?courseId=_266749_1:Explain aseptic technique for surgical prep;Aseptic prep steps and rationale;Practical;Week 2;https://example.com/practical:Construct a differential diagnosis for a lame dog;Lameness DDx;CBL;Week 3;https://example.com/cbl`
+
+// localStorage keys
+const LS_KEYS = {
+  LIST: "ilo_randomiser_list_v1",
+  DECK: "ilo_randomiser_deck_v1",
+  DISCARD: "ilo_randomiser_discard_v1",
+};
+
+// --------------------------
+// Helper functions
+// --------------------------
+function parseDataString(s) {
+  if (!s) return [];
+  return s
+    .split(":")
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((entry, idx) => {
+      const parts = entry.split(";");
+      // Allow missing link or other fields but prefer 5 parts
+      const [ilo = "", title = "", type = "", week = "", link = ""] = parts.map((p) => p.trim());
+      return {
+        id: `${idx}-${Math.random().toString(36).slice(2, 7)}`,
+        ilo,
+        title,
+        type,
+        week,
+        link,
+      };
+    });
+}
+
+function uniqueSorted(array) {
+  return Array.from(new Set(array)).sort();
+}
+
+// --------------------------
+// React component
+// --------------------------
+export default function ILORandomiser() {
+  // load list from localStorage or fall back to DATA_STRING
+  const stored = localStorage.getItem(LS_KEYS.LIST);
+  const [rawString, setRawString] = useState(stored ?? DATA_STRING);
+  const [parsed, setParsed] = useState(() => parseDataString(stored ?? DATA_STRING));
+
+  // Deck & discard store ID arrays (so item objects remain immutable)
+  const storedDeck = localStorage.getItem(LS_KEYS.DECK);
+  const storedDiscard = localStorage.getItem(LS_KEYS.DISCARD);
+  const [deckIds, setDeckIds] = useState(() => (storedDeck ? JSON.parse(storedDeck) : parsed.map((p) => p.id)));
+  const [discardIds, setDiscardIds] = useState(() => (storedDiscard ? JSON.parse(storedDiscard) : []));
+
+  // Filters
+  const types = useMemo(() => uniqueSorted(parsed.map((p) => p.type).filter(Boolean)), [parsed]);
+  const weeks = useMemo(() => uniqueSorted(parsed.map((p) => p.week).filter(Boolean)), [parsed]);
+  const [selectedTypes, setSelectedTypes] = useState(new Set(types));
+  const [selectedWeeks, setSelectedWeeks] = useState(new Set(weeks));
+
+  // Selected ILO
+  const [selected, setSelected] = useState(null);
+  const [rolling, setRolling] = useState(false);
+  const rollIntervalRef = useRef(null);
+
+  // Sync parsed -> deck default when parsed changes
+  useEffect(() => {
+    const ids = parsed.map((p) => p.id);
+    // If any deckIds are missing from new list (e.g. after reload), reset deck to all ids
+    setDeckIds((prev) => (prev.every((id) => ids.includes(id)) ? prev : ids));
+    // Remove discarded ids not present anymore
+    setDiscardIds((prev) => prev.filter((id) => ids.includes(id)));
+    // update filters default
+    setSelectedTypes(new Set(uniqueSorted(parsed.map((p) => p.type).filter(Boolean))));
+    setSelectedWeeks(new Set(uniqueSorted(parsed.map((p) => p.week).filter(Boolean))));
+  }, [parsed]);
+
+  // Persist to localStorage
+  useEffect(() => {
+    localStorage.setItem(LS_KEYS.LIST, rawString);
+    localStorage.setItem(LS_KEYS.DECK, JSON.stringify(deckIds));
+    localStorage.setItem(LS_KEYS.DISCARD, JSON.stringify(discardIds));
+  }, [rawString, deckIds, discardIds]);
+
+  // Re-parse when user clicks load
+  function loadListFromTextarea() {
+    const p = parseDataString(rawString);
+    setParsed(p);
+    // reset deck to all items by default
+    setDeckIds(p.map((x) => x.id));
+    setDiscardIds([]);
+    setSelected(null);
+  }
+
+  // Filtering: compute available IDs in deck matching filters
+  const availableIds = useMemo(() => {
+    return deckIds.filter((id) => {
+      const it = parsed.find((p) => p.id === id);
+      if (!it) return false;
+      const typeOk = selectedTypes.size === 0 ? true : selectedTypes.has(it.type);
+      const weekOk = selectedWeeks.size === 0 ? true : selectedWeeks.has(it.week);
+      return typeOk && weekOk;
+    });
+  }, [deckIds, parsed, selectedTypes, selectedWeeks]);
+
+  function toggleType(t) {
+    setSelectedTypes((prev) => {
+      const s = new Set(prev);
+      if (s.has(t)) s.delete(t);
+      else s.add(t);
+      return s;
+    });
+  }
+  function toggleWeek(w) {
+    setSelectedWeeks((prev) => {
+      const s = new Set(prev);
+      if (s.has(w)) s.delete(w);
+      else s.add(w);
+      return s;
+    });
+  }
+
+  // Generate: animate rolling then pick one from availableIds
+  function generateILO() {
+    if (rolling) return;
+    if (availableIds.length === 0) {
+      alert("No ILOs match the current filters and deck state.");
+      return;
+    }
+    setRolling(true);
+    setSelected(null);
+    const start = Date.now();
+    let elapsed = 0;
+    // rolling animation: cycle through random available items for 1.5s
+    rollIntervalRef.current = setInterval(() => {
+      elapsed = Date.now() - start;
+      const randomId = availableIds[Math.floor(Math.random() * availableIds.length)];
+      const it = parsed.find((p) => p.id === randomId);
+      setSelected({ placeholder: true, ...it });
+      if (elapsed > 1500) {
+        // stop and select final
+        clearInterval(rollIntervalRef.current);
+        const finalId = availableIds[Math.floor(Math.random() * availableIds.length)];
+        const finalIt = parsed.find((p) => p.id === finalId);
+        setSelected({ ...finalIt });
+        setRolling(false);
+      }
+    }, 100);
+  }
+
+  function discardSelected() {
+    if (!selected) return;
+    setDeckIds((prev) => prev.filter((id) => id !== selected.id));
+    setDiscardIds((prev) => [selected.id, ...prev]);
+    setSelected(null);
+  }
+
+  function returnSelectedToDeck() {
+    if (!selected) return;
+    setDeckIds((prev) => [selected.id, ...prev]);
+    setDiscardIds((prev) => prev.filter((id) => id !== selected.id));
+    setSelected(null);
+  }
+
+  function returnAllToDeck() {
+    setDeckIds(parsed.map((p) => p.id));
+    setDiscardIds([]);
+    setSelected(null);
+  }
+
+  function clearDiscard() {
+    setDiscardIds([]);
+  }
+
+  // UI helpers
+  const deckCount = deckIds.length;
+  const discardCount = discardIds.length;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white p-6 font-sans text-slate-900">
+      <div className="max-w-6xl mx-auto">
+        <header className="mb-6">
+          <h1 className="text-3xl font-bold">ILO Randomiser</h1>
+          <p className="text-sm text-slate-600 mt-1">Shuffle, filter, and draw learning objectives. Edit the list below to add or change ILOs.</p>
+        </header>
+
+        <section className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="col-span-2 bg-white rounded-2xl shadow p-4">
+            <h2 className="font-semibold mb-2">Deck</h2>
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-lg border border-slate-200 shadow-sm text-center w-36">
+                <div className="text-xs text-slate-500">In deck</div>
+                <div className="text-xl font-bold">{deckCount}</div>
+              </div>
+              <div className="p-3 rounded-lg border border-slate-200 shadow-sm text-center w-36">
+                <div className="text-xs text-slate-500">Discarded</div>
+                <div className="text-xl font-bold">{discardCount}</div>
+              </div>
+              <div className="ml-auto flex gap-2">
+                <button className="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200" onClick={returnAllToDeck}>Reset deck</button>
+                <button className="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200" onClick={clearDiscard}>Clear discard</button>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <h3 className="text-sm font-medium">Filters</h3>
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">Type (multi-select)</div>
+                  <div className="flex flex-wrap gap-2">
+                    {types.map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => toggleType(t)}
+                        className={`px-2 py-1 rounded-full border ${selectedTypes.has(t) ? 'bg-slate-800 text-white' : 'bg-white text-slate-700'}`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">Week (multi-select)</div>
+                  <div className="flex flex-wrap gap-2">
+                    {weeks.map((w) => (
+                      <button
+                        key={w}
+                        onClick={() => toggleWeek(w)}
+                        className={`px-2 py-1 rounded-full border ${selectedWeeks.has(w) ? 'bg-slate-800 text-white' : 'bg-white text-slate-700'}`}
+                      >
+                        {w}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center gap-4">
+              <button
+                className={`px-4 py-2 rounded-2xl font-semibold shadow-lg ${rolling ? 'bg-amber-300' : 'bg-emerald-500 text-white hover:opacity-95'}`}
+                onClick={generateILO}
+              >
+                {rolling ? 'Shuffling...' : 'Generate ILO'}
+              </button>
+              <div className="text-sm text-slate-500">Available (matching filters): <span className="font-medium text-slate-700">{availableIds.length}</span></div>
+            </div>
+
+          </div>
+
+          <div className="bg-white rounded-2xl shadow p-4">
+            <h2 className="font-semibold mb-2">Edit / Paste ILO list</h2>
+            <textarea
+              value={rawString}
+              onChange={(e) => setRawString(e.target.value)}
+              className="w-full h-48 border rounded p-2 text-sm font-mono"
+            />
+            <div className="mt-2 flex gap-2">
+              <button onClick={loadListFromTextarea} className="px-3 py-1 rounded bg-indigo-600 text-white">Load list</button>
+              <button onClick={() => { setRawString(DATA_STRING); }} className="px-3 py-1 rounded bg-slate-100">Reset to example</button>
+            </div>
+            <div className="mt-3 text-xs text-slate-500">
+              Format per entry: <code className="font-mono">ILO;TITLE;TYPE;WEEK;LINK</code> separated by <code className="font-mono">:</code>
+            </div>
+          </div>
+        </section>
+
+        <section className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="col-span-2 flex items-center justify-center">
+            {/* Card deck visual */}
+            <div className="relative w-96 h-56">
+              {/* Discard pile */}
+              <div className="absolute left-0 top-0 w-28 h-40 rounded-lg border border-slate-200 bg-white shadow p-3 flex flex-col">
+                <div className="text-xs text-slate-500">Discard</div>
+                <div className="mt-auto text-sm font-semibold">{discardCount}</div>
+              </div>
+
+              {/* Deck stack (visual layering) */}
+              <div className="absolute right-0 top-0 w-36 h-48 flex items-center justify-center">
+                {/* show a small stack effect based on how many in deck (capped) */}
+                {[...Array(Math.min(deckCount, 6)).keys()].map((i) => (
+                  <div
+                    key={i}
+                    style={{ transform: `translateY(${i * -4}px) translateX(${i * -2}px) rotate(${i % 2 === 0 ? -2 : 2}deg)` }}
+                    className="absolute w-36 h-48 bg-white rounded-lg border shadow"
+                  />
+                ))}
+
+                <div className="absolute w-36 h-48 rounded-lg border bg-gradient-to-b from-white to-slate-50 p-4 flex flex-col justify-between">
+                  <div className="text-xs text-slate-500">Deck</div>
+                  <div className="text-sm text-slate-700 font-medium">{deckCount} cards</div>
+                </div>
+              </div>
+
+              {/* Selected card (centre) */}
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-52">
+                <div className={`w-full h-full rounded-2xl shadow-2xl border p-4 bg-white transform transition-all duration-300 ${rolling ? 'scale-105 animate-pulse' : ''}`}>
+                  {selected ? (
+                    <div className="h-full flex flex-col">
+                      <div className="text-xs text-slate-500">{selected.type} • {selected.week}</div>
+                      <h3 className="text-xl font-bold mt-2">{selected.title}</h3>
+                      <p className="mt-2 text-sm text-slate-700 flex-grow">{selected.ilo}</p>
+                      <div className="mt-3 flex gap-2">
+                        {selected.link ? (
+                          <a href={selected.link} target="_blank" rel="noreferrer" className="text-sm underline">Open link</a>
+                        ) : null}
+                        <div className="ml-auto flex gap-2">
+                          <button onClick={returnSelectedToDeck} className="px-3 py-1 rounded bg-slate-100">Return to deck</button>
+                          <button onClick={discardSelected} className="px-3 py-1 rounded bg-rose-500 text-white">Discard</button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                      <div className="text-sm">No ILO selected</div>
+                      <div className="text-xs mt-2">Click "Generate ILO" to shuffle</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow p-4">
+            <h2 className="font-semibold mb-2">Deck & Discard</h2>
+            <div className="text-sm text-slate-600 mb-2">Use the buttons on the selected card to return or discard an ILO. You can also manage the list above.</div>
+            <div className="overflow-auto max-h-64">
+              <table className="w-full text-sm">
+                <thead className="text-slate-500 text-left text-xs">
+                  <tr>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Week</th>
+                    <th className="text-right">State</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsed.map((p) => {
+                    const inDeck = deckIds.includes(p.id);
+                    const inDiscard = discardIds.includes(p.id);
+                    return (
+                      <tr key={p.id} className={`border-t ${selected && selected.id === p.id ? 'bg-amber-50' : ''}`}>
+                        <td className="py-1 pr-2">{p.title}</td>
+                        <td className="py-1 pr-2">{p.type}</td>
+                        <td className="py-1 pr-2">{p.week}</td>
+                        <td className="py-1 text-right">
+                          {inDeck ? (
+                            <button onClick={() => { setDeckIds((d) => d.filter((id) => id !== p.id)); setDiscardIds((d) => [p.id, ...d]); }} className="px-2 py-0.5 rounded bg-slate-100">Discard</button>
+                          ) : inDiscard ? (
+                            <button onClick={() => { setDiscardIds((d) => d.filter((id) => id !== p.id)); setDeckIds((d) => [p.id, ...d]); }} className="px-2 py-0.5 rounded bg-slate-100">Return</button>
+                          ) : (
+                            <span className="text-xs text-slate-400">Unknown</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <footer className="text-xs text-slate-500">
+          Tip: To add a new type or week, include it in the TYPE or WEEK field of an ILO entry. The UI will automatically detect and show it in the filters.
+        </footer>
+      </div>
+    </div>
+  );
+}
