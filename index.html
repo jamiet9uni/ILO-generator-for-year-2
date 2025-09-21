@@ -1,271 +1,174 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 
-// --------------------------
-// Edit ILOs here (simple string format)
-// Format for each entry: ILO;TITLE;TYPE;WEEK;LINK
-// Separate entries with a colon ':' (no spaces required)
-const DATA_STRING = `Describe how to perform a pre-anaesthetic assessment;How do you prepare animals for anaesthesia?;Lecture;Week 1;https://example.com:Explain aseptic technique for surgical prep;Aseptic prep steps and rationale;Practical;Week 2;https://example.com:Construct a differential diagnosis for a lame dog;Lameness DDx;CBL;Week 3;https://example.com`;
+// Example ILO list string
+const DATA_STRING = `Describe how to perform a pre-anaesthetic assessment;How do you prepare animals for anaesthesia?;Lecture;Week 1;https://www.ole.bris.ac.uk/example1:
+Explain the mechanism of action of NSAIDs;How do NSAIDs reduce inflammation?;CBL;Week 3;https://www.ole.bris.ac.uk/example2`;
 
-function parseDataString(s) {
-  if (!s) return [];
-  return s
-    .split(":")
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((entry, idx) => {
-      const [ilo = "", title = "", type = "", week = "", link = ""] = entry
-        .split(";")
-        .map((p) => p.trim());
-      return { id: `${idx}-${Math.random().toString(36).slice(2, 7)}`, ilo, title, type, week, link };
-    });
-}
+const parseData = (data) => {
+  return data.split(":").map((entry) => {
+    const [ilo, title, type, week, link] = entry.split(";");
+    return { ilo, title, type, week, link };
+  });
+};
 
-export default function ILORandomiser() {
-  const parsed = useMemo(() => parseDataString(DATA_STRING), []);
+export default function App() {
+  const [ilos] = useState(parseData(DATA_STRING));
+  const [deck, setDeck] = useState(ilos);
+  const [discardPile, setDiscardPile] = useState([]);
+  const [currentCard, setCurrentCard] = useState(null);
+  const [showInfo, setShowInfo] = useState(false);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [canDiscard, setCanDiscard] = useState(false);
 
-  const [deckIds, setDeckIds] = useState(() => parsed.map((p) => p.id));
-  const [discardIds, setDiscardIds] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [isShuffling, setIsShuffling] = useState(false);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [isFlying, setIsFlying] = useState(false);
-  const [flyingItem, setFlyingItem] = useState(null);
-  const [isReturning, setIsReturning] = useState(false);
-  const [returningItem, setReturningItem] = useState(null);
-
-  const drawIntervalRef = useRef(null);
-  const shuffleTimeoutRef = useRef(null);
-  const flyTimeoutRef = useRef(null);
-  const returnTimeoutRef = useRef(null);
-
-  useEffect(() => {
-    return () => {
-      clearInterval(drawIntervalRef.current);
-      clearTimeout(shuffleTimeoutRef.current);
-      clearTimeout(flyTimeoutRef.current);
-      clearTimeout(returnTimeoutRef.current);
-    };
-  }, []);
-
-  const [filterTypes, setFilterTypes] = useState(new Set());
-  const [filterWeeks, setFilterWeeks] = useState(new Set());
-
-  const types = useMemo(() => Array.from(new Set(parsed.map((p) => p.type).filter(Boolean))).sort(), [parsed]);
-  const weeks = useMemo(() => Array.from(new Set(parsed.map((p) => p.week).filter(Boolean))).sort(), [parsed]);
-
-  function getItemById(id) {
-    return parsed.find((p) => p.id === id) || null;
-  }
-
-  const availableIds = useMemo(() => {
-    return deckIds.filter((id) => {
-      const it = getItemById(id);
-      if (!it) return false;
-      const typeOk = filterTypes.size === 0 ? true : filterTypes.has(it.type);
-      const weekOk = filterWeeks.size === 0 ? true : filterWeeks.has(it.week);
-      return typeOk && weekOk;
-    });
-  }, [deckIds, filterTypes, filterWeeks]);
-
-  const deckCount = availableIds.length;
-  const discardCount = discardIds.length;
-
-  function playSound(action) {
-    // Examples:
-    // if (action === 'draw') new Audio('/sounds/draw.mp3').play();
-    // if (action === 'shuffle') new Audio('/sounds/shuffle.mp3').play();
-    // if (action === 'discard') new Audio('/sounds/discard.mp3').play();
-    // if (action === 'shuffleIntoDeck') new Audio('/sounds/return.mp3').play();
-  }
-
-  function drawCard() {
-    if (isDrawing) return;
-    if (availableIds.length === 0) return;
-
-    setIsDrawing(true);
-    playSound("shuffle");
-
-    drawIntervalRef.current = setInterval(() => {
-      const id = availableIds[Math.floor(Math.random() * availableIds.length)];
-      setSelectedId(id);
-    }, 120);
-
+  // Handle drawing card
+  const drawCard = () => {
+    if (deck.length === 0 || isAnimating) return;
+    setIsAnimating(true);
+    const randomIndex = Math.floor(Math.random() * deck.length);
+    const selected = deck[randomIndex];
     setTimeout(() => {
-      clearInterval(drawIntervalRef.current);
-      const finalId = availableIds[Math.floor(Math.random() * availableIds.length)];
-      setSelectedId(finalId);
-      setIsDrawing(false);
-      playSound("draw");
-    }, 1200);
-  }
+      setCurrentCard(selected);
+      setShowInfo(true);
+      setIsAnimating(false);
+      setCanDiscard(false);
+      setTimeout(() => setCanDiscard(true), 500); // cooldown for discard
+    }, 800);
+  };
 
-  function discardSelected() {
-    if (!selectedId) return;
-    const item = getItemById(selectedId);
-    if (!item) return;
+  // Handle discard
+  const discardCard = () => {
+    if (!currentCard || !canDiscard) return;
+    setDiscardPile([...discardPile, currentCard]);
+    setDeck(deck.filter((c) => c !== currentCard));
+    setCurrentCard(null);
+    setShowInfo(false);
+  };
 
-    setFlyingItem(item);
-    setIsFlying(true);
-    playSound("discard");
+  // Shuffle current card back into deck
+  const shuffleIntoDeck = () => {
+    if (!currentCard) return;
+    setDeck([...deck]);
+    setCurrentCard(null);
+    setShowInfo(false);
+  };
 
-    flyTimeoutRef.current = setTimeout(() => {
-      setIsFlying(false);
-      setFlyingItem(null);
-      setDeckIds((prev) => prev.filter((id) => id !== selectedId));
-      setDiscardIds((prev) => (prev.includes(selectedId) ? prev : [selectedId, ...prev]));
-      setSelectedId(null);
-    }, 650);
-  }
-
-  function shuffleCurrentIntoDeck() {
-    if (!selectedId) return;
-    const item = getItemById(selectedId);
-    if (!item) return;
-
-    setReturningItem(item);
-    setIsReturning(true);
-    playSound("shuffleIntoDeck");
-
-    returnTimeoutRef.current = setTimeout(() => {
-      setIsReturning(false);
-      setReturningItem(null);
-      setDeckIds((prev) => (prev.includes(selectedId) ? prev : [selectedId, ...prev]));
-      setDiscardIds((prev) => prev.filter((id) => id !== selectedId));
-      setSelectedId(null);
-    }, 650);
-  }
-
-  function resetDeck() {
-    setIsShuffling(true);
-    playSound("shuffle");
-    clearTimeout(shuffleTimeoutRef.current);
-    shuffleTimeoutRef.current = setTimeout(() => setIsShuffling(false), 700);
-    setDeckIds(parsed.map((p) => p.id));
-    setDiscardIds([]);
-    setSelectedId(null);
-  }
-
-  function toggleType(t) {
-    setFilterTypes((prev) => {
-      const s = new Set(prev);
-      if (s.has(t)) s.delete(t);
-      else s.add(t);
-      return s;
-    });
-  }
-  function toggleWeek(w) {
-    setFilterWeeks((prev) => {
-      const s = new Set(prev);
-      if (s.has(w)) s.delete(w);
-      else s.add(w);
-      return s;
-    });
-  }
-
-  const selectedItem = getItemById(selectedId);
+  // Reset deck (move all discards back)
+  const resetDeck = () => {
+    setDeck([...deck, ...discardPile]);
+    setDiscardPile([]);
+    setCurrentCard(null);
+    setShowInfo(false);
+  };
 
   return (
-    <div style={{ minHeight: "100vh", fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial" }}>
-      <style>{`
-        .topbar { display:flex; align-items:center; justify-content:center; padding:18px 12px; position:relative; border-bottom:1px solid rgba(0,0,0,0.04);} 
-        .settings-btn{position:absolute; right:18px; top:14px;}
-        .center-area{display:flex; flex-direction:column; align-items:center; justify-content:center; padding:32px 12px;}
-        .deck-stack{width:190px; height:250px; position:relative;}
-        .card-base{width:100%; height:100%; border-radius:14px; background:#fff; box-shadow:0 12px 30px rgba(2,6,23,0.08); border:1px solid rgba(2,6,23,0.06); padding:14px; box-sizing:border-box; display:flex; flex-direction:column; position:relative; z-index:20;}
-        .card-title{font-weight:700; margin-top:8px; font-size:16px; z-index:21;}
-        .card-sub{font-size:12px; color:#4b5563; z-index:21;}
-        .deck-stack .stack-piece{position:absolute; width:100%; height:100%; border-radius:14px; background:#fff; border:1px solid rgba(2,6,23,0.04); box-shadow:0 6px 18px rgba(2,6,23,0.06);}
-        .stack-piece:nth-child(1){transform:translateY(-6px) rotate(-3deg);} .stack-piece:nth-child(2){transform:translateY(-10px) rotate(2deg);} .stack-piece:nth-child(3){transform:translateY(-14px) rotate(-2deg);} .stack-piece:nth-child(4){transform:translateY(-18px) rotate(3deg);} 
-        .shuffling .stack-piece{animation:shuffle 700ms ease-in-out both}
-        @keyframes shuffle{0%{transform:translateY(-6px) rotate(-3deg)}50%{transform:translateY(-2px) rotate(6deg)}100%{transform:translateY(-6px) rotate(-3deg)}}
-        .drawing { transform: scale(1.03); box-shadow: 0 20px 50px rgba(2,6,23,0.12); transition: transform 240ms ease; }
-        .flying { position:fixed; left:50%; top:50%; width:260px; height:340px; margin-left:-130px; margin-top:-170px; border-radius:14px; background:#fff; z-index:60; display:flex; align-items:center; justify-content:center; animation:flyToDiscard 650ms forwards cubic-bezier(.2,.9,.3,1); box-shadow:0 20px 50px rgba(2,6,23,0.12); }
-        @keyframes flyToDiscard{ 0% { transform: translate(0,0) scale(1); opacity:1 } 100% { transform: translate(220px,220px) scale(0.45); opacity:0.6 } }
-        .returning { position:fixed; left:50%; top:50%; width:260px; height:340px; margin-left:-130px; margin-top:-170px; border-radius:14px; background:#fff; z-index:60; display:flex; align-items:center; justify-content:center; animation:returnToDeck 650ms forwards cubic-bezier(.2,.9,.3,1); box-shadow:0 20px 50px rgba(2,6,23,0.12); }
-        @keyframes returnToDeck{ 0% { transform: translate(0,0) scale(1); opacity:1 } 100% { transform: translate(-220px,-220px) scale(0.45); opacity:0.6 } }
-        .pulse { animation: pulse 1200ms infinite; }
-        @keyframes pulse { 0%{ transform:scale(1) } 50%{ transform:scale(1.02) } 100%{ transform:scale(1) } }
-        @media (max-width:640px){ .flying, .returning { width:200px; height:260px; margin-left:-100px; margin-top:-130px; } }
-      `}</style>
+    <div className="min-h-screen bg-green-50 flex flex-col items-center p-6">
+      <h1 className="text-3xl font-bold mb-6">Year 2 ILO Generator</h1>
 
-      <div className="topbar">
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Year 2 ILO generator</h1>
-        <button
-          className="settings-btn"
-          onClick={() => setSettingsOpen((s) => !s)}
-          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(0,0,0,0.06)", background: "#fff" }}
-        >
-          Settings
-        </button>
+      {/* Deck counter */}
+      <div className="mb-2 text-lg font-semibold">Deck: {deck.length}</div>
+
+      {/* Main card */}
+      <div className="relative w-64 h-40 mb-4">
+        <AnimatePresence>
+          {currentCard ? (
+            <motion.div
+              key={currentCard.ilo}
+              initial={{ opacity: 0, y: -50 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 50 }}
+              className="absolute inset-0 bg-white shadow-xl rounded-2xl flex items-center justify-center text-center p-4 text-sm font-medium"
+            >
+              {currentCard.ilo}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="back"
+              className="absolute inset-0 bg-blue-200 shadow-xl rounded-2xl flex items-center justify-center text-xl font-bold"
+            >
+              Card Back
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {settingsOpen && (
-        <div style={{ position: "fixed", right: 18, top: 68, width: 260, background: "#fff", borderRadius: 10, boxShadow: "0 12px 40px rgba(2,6,23,0.12)", padding: 12, zIndex: 80 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Filters</div>
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Type</div>
-            {types.map((t) => (
-              <label key={t} style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                <input type="checkbox" checked={filterTypes.has(t)} onChange={() => toggleType(t)} />
-                <span style={{ fontSize: 13 }}>{t}</span>
-              </label>
-            ))}
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Week</div>
-            {weeks.map((w) => (
-              <label key={w} style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                <input type="checkbox" checked={filterWeeks.has(w)} onChange={() => toggleWeek(w)} />
-                <span style={{ fontSize: 13 }}>{w}</span>
-              </label>
-            ))}
-          </div>
-          <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-            <button onClick={() => { setFilterTypes(new Set()); setFilterWeeks(new Set()); }} style={{ padding: "6px 8px", borderRadius: 6 }}>Clear</button>
-            <button onClick={() => { setFilterTypes(new Set(types)); setFilterWeeks(new Set(weeks)); }} style={{ padding: "6px 8px", borderRadius: 6 }}>Select all</button>
-          </div>
+      {/* Controls */}
+      <div className="flex gap-4 mb-6">
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={drawCard}
+          disabled={isAnimating || (currentCard && showInfo)}
+          className={`px-4 py-2 rounded-lg text-white font-semibold ${
+            isAnimating || (currentCard && showInfo)
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-green-600 animate-pulse"
+          }`}
+        >
+          Draw a Card
+        </motion.button>
+
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={shuffleIntoDeck}
+          disabled={!currentCard}
+          className="px-4 py-2 rounded-lg bg-yellow-500 text-white font-semibold"
+        >
+          Shuffle into Deck
+        </motion.button>
+
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={discardCard}
+          disabled={!currentCard || !canDiscard}
+          className="px-4 py-2 rounded-lg bg-red-500 text-white font-semibold"
+        >
+          Discard
+        </motion.button>
+
+        <motion.button
+          whileHover={{ scale: 1.05, backgroundColor: "#dc2626" }}
+          whileTap={{ scale: 0.95 }}
+          onClick={resetDeck}
+          className="px-4 py-2 rounded-lg bg-red-600 text-white font-bold border-2 border-red-800"
+        >
+          Reset Deck
+        </motion.button>
+      </div>
+
+      {/* ILO Information */}
+      {showInfo && currentCard && (
+        <div className="absolute left-6 top-32 w-64 bg-white rounded-xl shadow-md p-4 text-sm">
+          <h2 className="text-lg font-bold mb-2">ILO Information</h2>
+          <p><strong>Title:</strong> {currentCard.title}</p>
+          <p><strong>Type:</strong> {currentCard.type}</p>
+          <p><strong>Week:</strong> {currentCard.week}</p>
+          <a
+            href={currentCard.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline mt-2 inline-block"
+          >
+            Open Blackboard Source for ILO
+          </a>
         </div>
       )}
 
-      <div className="center-area">
-        <div style={{ marginBottom: 8, fontWeight: 600, color: "#374151" }}>Deck: <span style={{ fontWeight: 800 }}>{deckCount}</span> cards</div>
-
-        <div className={`deck-stack ${isShuffling ? 'shuffling' : ''}`}>
-          <div className="stack-piece" style={{ zIndex: 1 }} />
-          <div className="stack-piece" style={{ zIndex: 2 }} />
-          <div className="stack-piece" style={{ zIndex: 3 }} />
-
-          <div className={`card-base ${isDrawing ? 'pulse' : ''} ${selectedId ? 'drawing' : ''}`} style={{ zIndex: 10 }}>
-            {selectedItem ? (
-              <>
-                <div style={{ fontSize: 12, color: '#6b7280', zIndex:21 }}>{selectedItem.type} • {selectedItem.week}</div>
-                <div className="card-title">{selectedItem.title}</div>
-                <div style={{ marginTop: 8, fontSize: 13, color: '#374151', zIndex:21 }}>{selectedItem.ilo}</div>
-                <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'space-between', gap: 8, zIndex:21 }}>
-                  <div style={{ fontSize: 12, color: '#6b7280' }}>Link:</div>
-                  <div style={{ fontSize: 12 }}><a href={selectedItem.link} target="_blank" rel="noreferrer">Open</a></div>
-                </div>
-              </>
-            ) : (
-              <div style={{ textAlign: 'center', color: '#9ca3af' }}>No card selected</div>
-            )}
-          </div>
+      {/* Discard pile */}
+      <div className="absolute bottom-6 right-6 text-center">
+        <div className="mb-1 font-semibold">Discard: {discardPile.length}</div>
+        <div className="relative w-16 h-24">
+          {discardPile.map((_, i) => (
+            <div
+              key={i}
+              className="absolute w-16 h-24 bg-gray-400 rounded-md shadow-md"
+              style={{ top: i * 0.5, left: i * 0.5 }}
+            />
+          ))}
         </div>
-
-        <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-          <button onClick={shuffleCurrentIntoDeck} style={{ padding: '10px 14px', borderRadius: 8, background: '#eef2ff', border: '1px solid #e0e7ff' }}>Shuffle into deck</button>
-
-          <button onClick={drawCard} style={{ padding: '10px 18px', borderRadius: 8, background: '#10b981', color: '#fff', fontWeight: 700 }}>Draw a card</button>
-
-          <button onClick={discardSelected} style={{ padding: '10px 14px', borderRadius: 8, background: '#f43f5e', color: '#fff' }}>Discard</button>
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <button onClick={resetDeck} style={{ padding: '6px 10px', borderRadius: 8, background: '#fff', border: '1px solid rgba(0,0,0,0.06)' }}>Reset deck</button>
-        </div>
-
       </div>
-
-      <div style={{ position: 'fixed', right: 22, bottom: 22, width: 140, textAlign: 'center' }}>
+    </div>
+  );
+}
